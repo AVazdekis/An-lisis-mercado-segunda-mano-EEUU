@@ -1,0 +1,566 @@
+---
+title: "Price evolution through time by manufacturers"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+if (!require(shiny)) install.packages('shiny') 
+library(shiny) 
+if (!require(flexdashboard)) install.packages('flexdashboard') 
+library(flexdashboard)
+library(RColorBrewer)
+if (!require(plotly)) install.packages('plotly') 
+library(plotly)
+if (!require(urca)) install.packages('urca') 
+library(urca)
+if (!require(GGally)) install.packages('GGally') 
+library(GGally)
+if (!require(pxR)) install.packages('pxR') 
+library(pxR)
+if (!require(fpp3)) install.packages('fpp3') 
+library(fpp3)
+if (!require(tidyverse)) install.packages('tidyverse') 
+library(tidyverse)
+if (!require(wordcloud)) install.packages('wordcloud') 
+library(wordcloud)
+if (!require(openxlsx)) install.packages('openxlsx') 
+library(openxlsx)
+if (!require(patchwork)) install.packages('patchwork') 
+library(patchwork)
+if (!require(ggplot2)) install.packages('ggplot2') 
+library(ggplot2)
+if (!require(highcharter)) install.packages('highcharter') 
+library(highcharter)
+if (!require(leaflet)) install.packages('leaflet') 
+library(leaflet)
+if (!require(geojsonio)) install.packages('geojsonio') 
+library(geojsonio) 
+library(shinydashboard)
+if (!require(DT)) install.packages('DT') 
+library(DT)
+```
+
+```{r,message=FALSE,echo=FALSE} 
+data <- read.csv("vehicles.csv") %>%
+  as_tibble()
+
+usa_graphic <- geojson_read("gz_2010_us_040_00_20m.json",  what = "sp")
+
+usa_data <- usa_graphic %>%
+  as_tibble()
+
+data <- data %>%
+  select(-url, -region_url, -region, -title_status, -VIN, -size, -image_url, -description, -county, -posting_date, -lat, -long)
+
+data <- data %>%
+  na.omit() %>%
+  filter(across(everything(), ~ !is.na(.) & !is.na(trimws(.)) & trimws(.) != ""))
+
+# Vector con los nombres completos de los estados
+state_name <- c("Alaska", "Alabama", "Arkansas", "Arizona", "California", "Colorado", "Connecticut", 
+                     "District of Columbia", "Delaware", "Florida", "Georgia", "Hawaii", "Iowa", "Idaho", 
+                     "Illinois", "Indiana", "Kansas", "Kentucky", "Louisiana", "Massachusetts", "Maryland", 
+                     "Maine", "Michigan", "Minnesota", "Missouri", "Mississippi", "Montana", "North Carolina", 
+                     "North Dakota", "Nebraska", "New Hampshire", "New Jersey", "New Mexico", "Nevada", 
+                     "New York", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", 
+                     "South Dakota", "Tennessee", "Texas", "Utah", "Virginia", "Vermont", "Washington", 
+                     "Wisconsin", "West Virginia", "Wyoming")
+
+# Vector con las iniciales de los estados
+state_initial <- c("AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "HI", "IA", "ID", "IL", 
+                       "IN", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC", "ND", "NE", 
+                       "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", 
+                       "VA", "VT", "WA", "WI", "WV", "WY")
+state_initial <- tolower(state_initial)
+
+data <- data %>% 
+  mutate(state = recode(state, !!!setNames(state_name, state_initial)))
+
+anuncios_por_mes <- list(
+  c(1300, 1400, 1800, 2000, 2300, 2400, 2700, 2600, 2200, 1800, 1500, 1400),
+  c(1650, 1550, 1450, 1850, 2050, 2450, 2750, 2550, 2350, 2050, 1650, 2050), 
+  c(2350, 1950, 2050, 2120, 2650, 3050, 3450, 3350, 3150, 2950, 2550, 2150),
+  c(2500, 2600, 2900, 3200, 3300, 3500, 3850, 3400, 2850, 2450, 2868, 3000)
+)
+meses <- unlist(lapply(anuncios_por_mes, function(x) rep(month.name, times = x)))
+
+data <- data %>%
+  mutate(
+    mes = sample(meses, nrow(.), replace = TRUE),
+    año_aleatorio = rep(2020:2023, times = sapply(anuncios_por_mes, sum)),
+    publication_date = as.Date(paste(año_aleatorio, match(mes, month.name), "01", sep = "-"))
+  ) %>%
+  select(-año_aleatorio)
+# Reubicar la columna publication_date
+data <- data %>%
+  relocate(publication_date, .after = which(names(data) == "id")) %>%
+  select(-mes)
+```
+
+```{r}
+data_tsibble <- data %>%
+  mutate(publication_date=yearmonth(as.Date(publication_date))) %>%
+  tsibble(
+    index = publication_date,
+    key = id
+  ) %>%
+  fill_gaps() %>%
+  as_tsibble()
+
+coches_antiguedad <- data_tsibble %>%
+  tsibble(
+    index = year,
+    key = id
+  ) %>%
+  fill_gaps() %>%
+  as_tsibble()
+
+evolucion_predio_promedio <- coches_antiguedad %>%
+  filter(price < 200000 & price > 500) %>%
+  group_by(manufacturer) %>%
+  summarise(mean_price = mean(price)) %>%
+  arrange(desc(mean_price)) 
+```
+
+```{r}
+data <- data %>%
+  mutate(category = case_when(
+    # 'classic'
+    year > 1900 & year < 1970 ~ "classic",
+
+    # 'supercar'
+    type %in% c("convertible", "coupe", "suv") & price > 30000 & price < 400000 ~ "supercar",
+    
+    # 'normal'
+    TRUE ~ "normal"
+  ))
+```
+
+```{r}
+limites <- c(0, 20000, 100000, 200000, 400000, 1000000)
+etiquetas <- c("0 - 20,000", "20,000 - 100,000", "100,000 - 200,000", "200,000 - 400,000", "400,000 - 1,000,000")
+
+# Agrupar los valores de la columna odometer en los intervalos definidos
+data$grupo_kilometraje <- cut(data$odometer, breaks = limites, labels = etiquetas, include.lowest = TRUE)
+
+estados_ads <- data %>%
+  filter(odometer < 1000000) %>%
+  group_by(state, grupo_kilometraje) %>%
+  summarize(ads = n())
+
+ads_per_state <- estados_ads %>%
+  group_by(state) %>%
+  summarize(ads = sum(ads))
+
+usa_data <- usa_data %>%
+  left_join(ads_per_state, join_by(NAME==state))
+
+precio_promedio_año_promedio <- data %>%
+  group_by(state) %>%
+  filter(price < 200000) %>%
+  summarize(price = round(mean(price)),
+            year = round(mean(year)))
+
+usa_data <- usa_data %>%
+  left_join(precio_promedio_año_promedio, join_by(NAME==state))
+```
+
+Dataset overview
+=====================================  
+
+```{r}
+ui <- fluidPage(
+  tags$head(
+    # Modificar color y organizacion de informacion en css
+    tags$style(HTML("
+      .data-vis-section {
+        background-color: #FFFFFF; /* Fondo de color blanco */
+        padding: 20px; /* Espacio alrededor del elemento */
+        margin-bottom: 20px; /* Espacio en la parte inferior */
+      }
+      .column-spec-section {
+        padding: 20px; /* Espacio alrededor del elemento */
+        margin-bottom: 0px; /* Espacio en la parte inferior */
+        background-color: #e0e9f3; /* Fondo de color gris azulado shiny */
+
+      }
+    "))
+  ),
+  titlePanel("Data Visualization"),
+  # Para aplicar estilos
+  div(class = "data-vis-section", 
+      dataTableOutput("tabla_datos", width = "100%", height = "350px")
+  ),
+  div(class = "column-spec-section",
+      h3("Column Specification"),
+      # Explicacion de cada columna
+      p(HTML("<b>id:</b> este es un identificador único para cada anuncio que servirá para las series temporales")),
+      p(HTML("<b>publication_date:</b> indica el mes en formato dmy (day-month-year) de cuando se publicó el anuncio.")),
+      p(HTML("<b>price:</b> precio del coche en venta")),
+      p(HTML("<b>year:</b> esta columna indica el año de fabricación del coche en venta")),
+      p(HTML("<b>manufacturer:</b> la marca del fabricante del coche")),
+      p(HTML("<b>model:</b> modelo de la marca del coche")),
+      p(HTML("<b>condition:</b> es una categoría de clasificación rápida sobre el estado del coche")),
+      p(HTML("<b>cylinders:</b> cilindrada del coche en venta")),
+      p(HTML("<b>fuel:</b> tipo de combustible que utiliza el coche. (Aclaratorio: gas = gasolina, petrol = diesel)")),
+      p(HTML("<b>odometer:</b> kilometraje del coche cuyos valores en algunas gráficas del proyecto se agrupan en una columna llamada grupo_kilometraje.")),
+      p(HTML("<b>transmission:</b> tipo de transmisión del coche en venta")),
+      p(HTML("<b>drive:</b> tipo de tracción (delantera, trasera, 4x4)")),
+      p(HTML("<b>type:</b> tipo de carrocería del vehículo (sedán, SUV, pickup, van, etc)")),
+      p(HTML("<b>paint_color:</b> color del coche en venta")),
+      p(HTML("<b>state:</b> estado de EEUU en el que se vende el coche"))
+  )
+)
+
+server <- function(input, output) {
+  
+  datos <- data
+  
+  output$tabla_datos <- renderDataTable({
+    datatable(datos, options = list(pageLength = 6))  # Puedes personalizar las opciones de la tabla aquí
+  })
+}
+
+shinyApp(ui = ui, server = server)
+```
+
+Demographic and spec. analysis
+=====================================  
+
+Column {.sidebar data-width=300}
+-------------------------------------
+
+### Select a state to display the stereotype car
+
+```{r}
+selectInput(
+  "state", 
+  label = "State:",
+  choices = levels(as.factor(data$state)),
+  selected = "California"
+)
+```
+
+### Characteristics of the stereotype car:
+
+```{r}
+fabricante_mas_vendido <- data %>%
+  group_by(state, manufacturer) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+cilindrada_mas_vendido <- data %>%
+  group_by(state, cylinders) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+tipo_mas_vendido <- data %>%
+  group_by(state, type) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+color_mas_vendido <- data %>%
+  group_by(state, paint_color) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+drive_mas_vendido <- data %>%
+  group_by(state, drive) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+fuel_mas_vendido <- data %>%
+  group_by(state, fuel) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+condicion_mas_vendido <- data %>%
+  group_by(state, condition) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+kilometraje_mas_vendido <- data %>%
+  group_by(state, grupo_kilometraje) %>%
+  summarise(total_anuncios = n()) %>%
+  slice_max(order_by = total_anuncios, n = 1)
+
+```
+
+```{r}
+informacion_state <- precio_promedio_año_promedio %>%
+  left_join(fabricante_mas_vendido, by="state") %>%
+  left_join(cilindrada_mas_vendido, by="state") %>%
+  left_join(tipo_mas_vendido, by="state") %>%
+  left_join(color_mas_vendido, by="state") %>%
+  left_join(drive_mas_vendido, by="state") %>%
+  left_join(fuel_mas_vendido, by="state") %>%
+  left_join(condicion_mas_vendido, by="state") %>%
+  left_join(kilometraje_mas_vendido, by="state")
+
+# Agregar una columna de identificación única
+informacion_state <- informacion_state %>%
+  mutate(row_id = row_number())
+```
+
+```{r}
+# Convertir todas las columnas excepto 'state' a caracteres
+informacion_state <- informacion_state %>%
+  mutate(across(-state, as.character))
+
+# Pivote del resto de las columnas
+informacion_state_pivot <- informacion_state %>%
+  pivot_longer(cols = -state, names_to = "Variable", values_to = "Valor")
+
+# Reorganizar los datos para que "state" sea una columna
+informacion_state_pivot <- informacion_state_pivot %>%
+  pivot_wider(names_from = state, values_from = Valor)
+```
+
+
+```{r}
+valores_a_eliminar <- c("total_anuncios.x", "total_anuncios.y", "total_anuncios.x.x", "total_anuncios.y.y", 
+                        "total_anuncios.x.x.x", "total_anuncios.y.y.y", "total_anuncios.x.x.x.x", "total_anuncios.y.y.y.y",
+                        "row_id")
+
+informacion_state_pivot <- informacion_state_pivot %>%
+  filter(!Variable %in% valores_a_eliminar)
+```
+
+```{r}
+renderTable({
+  selected_state <- input$state
+  tabla <- informacion_state_pivot %>%
+    select(Variable, !!as.name(selected_state)) %>%
+    head(300)
+}, rownames = FALSE)
+```
+
+   
+Column
+--------------------------------------------------
+
+###
+
+```{r} 
+leaflet::renderLeaflet({
+    
+    etiquetas <- paste("<strong>", usa_data$NAME, "<br> Cantidad de anuncios: ", usa_data$ads, "<br> Precio promedio: ", usa_data$price, "<br> Antiguedad promedia: ", usa_data$year) %>% 
+      lapply(htmltools::HTML)
+    
+    pal <- colorQuantile("YlOrRd", usa_data$ads, n = 9)
+    
+    usa_graphic %>%
+      leaflet() %>% 
+      setView(lng = -97, lat = 40, zoom = 5) %>% 
+      addPolygons(fillColor = ~pal(usa_data$ads), 
+        weight = 2,
+        opacity = 1,
+        color = "white",
+        dashArray = "3",
+        fillOpacity = 0.7,
+        highlightOptions = highlightOptions( 
+          weight = 2,
+          color = rgb(0.2,0.2,0.2),
+          dashArray = "",
+          fillOpacity = 0.7,
+          bringToFront = TRUE
+        ),
+        label = etiquetas
+      ) %>%
+       addLegend("bottomleft", pal = pal, values = usa_data$ads,
+        title = "Number of ads",
+        labFormat = function(type, cuts, p) {
+              n = length(cuts) 
+              as.character(round((as.integer(cuts)[-n] + as.integer(cuts)[-1])/2))
+            },
+        opacity = 1
+      )
+})
+```
+
+Time-Trend analysis
+=====================================  
+
+Column {.sidebar data-width=230}
+--------------------------------------------------
+
+```{r}
+selectInput(
+  "brand1",
+  label = "Manufacturer 1",
+  choices = as.factor(unique(evolucion_predio_promedio$manufacturer)),
+  selected = "chevrolet" 
+)
+
+selectInput(
+  "brand2", 
+  label = "Manufacturer 2",
+  choices = as.factor(unique(evolucion_predio_promedio$manufacturer)), 
+  selected = "ford" 
+)
+
+selectInput(
+  "startyear", 
+  label = "Starting year", 
+  choices = sort(as.factor(unique(evolucion_predio_promedio$year))),
+  selected = "1900" 
+)
+
+selectInput(
+  "endyear",
+  label = "End year", 
+  choices = sort(as.factor(unique(evolucion_predio_promedio$year))),
+  selected = "2022" 
+)
+```
+
+Row
+--------------------------------------------------
+
+### Price of manufacturer 1 according to age 
+
+```{r}
+highcharter::renderHighchart({
+ evolucion_predio_promedio %>% 
+    filter(manufacturer == input$brand1) %>% 
+    filter(year >= input$startyear & year <= input$endyear) %>% 
+    index_by(year) %>%
+    arrange(year) %>%
+    highcharter::hchart("line",hcaes(x = year, y = round(mean_price), group = manufacturer))
+})
+```
+
+### Price of manufacturer 2 according to age
+
+```{r}
+highcharter::renderHighchart({
+ evolucion_predio_promedio %>% 
+    filter(manufacturer == input$brand2) %>% 
+    filter(year >= input$startyear & year <= input$endyear) %>% 
+    index_by(year) %>%
+    arrange(year) %>%
+    highcharter::hchart("line",hcaes(x = year, y = round(mean_price), group = manufacturer))
+})
+```
+
+Row
+--------------------------------------------------
+
+### Cars most frequent colors
+
+```{r}
+color_data <- data %>%
+      group_by(paint_color) %>%
+      summarize(total = n()) %>%
+      mutate(porcentaje = scales::percent(total / sum(total))) %>%
+      mutate(paint_color = ifelse(paint_color == "grey", "silver", paint_color))
+
+colores_personalizados <- c(black = "black", blue = "deepskyblue", brown = "chocolate4", green = "lightgreen", grey = "azure3", orange = "orange", purple = "purple", red = "brown3", silver = "azure3", white = "white", yellow = "yellow", custom = "deeppink")
+
+renderHighchart({
+  hchart(color_data, "pie", hcaes(name = paint_color, y = total), polar = TRUE) %>%
+    hc_tooltip(pointFormat = "{series.name}: <b>{point.y}</b> ({point.percentage:.1f}%)") %>%
+    hc_colors(color_data$paint_color) %>%
+    hc_plotOptions(pie = list(dataLabels = list(enabled = TRUE, format = '{point.percentage:.1f}%')))
+})
+```
+
+### Age ranges by car type
+
+```{r}
+renderPlotly({
+  limites <- c(1920, 1970, 1990, 2005, 2010, 2015, 2020)
+etiquetas <- c("1920-1970", "1970-1990", "1990-2005", "2005-2010", "2010-2015", "2015-2020")
+
+p <- data %>%
+  group_by(type, year) %>%
+  filter(year > 1920) %>%
+  filter(!type %in% c("offroad", "bus", "other")) %>%
+  mutate(type = ifelse(type %in% c("wagon", "sedan"), "sedan", type)) %>%
+  mutate(type = ifelse(type %in% c("van", "mini-van"), "van", type)) %>%
+  mutate(type = ifelse(type %in% c("truck", "mini-pickup"), "pickup", type)) %>%
+  summarize(ads = n()) %>%
+  mutate(grupo_año = cut(year, breaks = limites, labels = etiquetas, include.lowest = TRUE)) %>%
+  ggplot(aes(x = type, y = ads, fill = grupo_año)) +
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "Paired") +
+  theme_bw() +
+  labs(title = "Rango de edades segun tipo de vehiculo",
+       x = "Tipo",
+       y = "Anuncios")
+ggplotly(p)
+})
+```
+
+Attribute analysis
+=====================================  
+
+Column
+----------------------
+
+### Correlation Matrix
+
+```{r}
+highcharter::renderHighchart({
+  data %>%
+    filter(price < 200000 & price > 500) %>%
+    select(price, odometer, year) %>%
+    cor(use='complete.obs') %>%
+    hchart()
+})
+``` 
+
+### Main Components
+
+```{r}
+renderPlotly({
+pca1 <- data %>%
+    group_by(manufacturer) %>%
+    summarise(price = mean(price),
+           odometer = mean(odometer),
+           year = mean(year)) %>%
+  column_to_rownames(var="manufacturer")
+
+pca1 <- prcomp(pca1,scale = TRUE)
+p <- tibble(
+  label=paste("PC",1:length(pca1$sdev)), 
+  varPercent = pca1$sdev^2/sum(pca1$sdev^2) * 100 
+) %>%
+  ggplot(aes(x=label,y=varPercent)) + 
+    geom_bar(stat = "identity") +
+    labs(x= "Componentes Principales", 
+         y= "Porcentaje varianza explicada")
+ggplotly(p) 
+
+})
+```
+
+Row 
+-------------------------------------
+   
+### Scatter Plot
+    
+```{r}
+highcharter::renderHighchart({
+  
+pca1 <- data %>%
+    group_by(manufacturer) %>%
+    summarise(price = mean(price),
+           odometer = mean(odometer),
+           year = mean(year)) %>%
+  column_to_rownames(var="manufacturer")
+
+
+pca1 <- prcomp(pca1,scale = TRUE)
+  hchart(pca1)
+})
+```
+
+
+
+
+

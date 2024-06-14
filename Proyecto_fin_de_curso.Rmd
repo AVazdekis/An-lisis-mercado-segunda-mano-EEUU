@@ -1,0 +1,622 @@
+---
+title: "Análisis del mercado de coches segunda mano EEUU"
+author: "Aris Vazdekis Soria"
+date: "2024-03-18"
+output: html_document
+---
+
+Link al cuadro de mandos: http://10.22.143.222:3838/sample-apps/a2457/cuadro_de_mandos.Rmd
+
+
+## Introducción al proyecto
+
+Este proyecto trata sobre un profundo analisis del mercado de coches de segunda mano en Estados Unidos. Seran analizadas las caracteristicas de los mismos, asi como fechas, datos demograficos, estacionalidades, tendencias y hasta correlaciones.
+
+El mercado de coches de segunda mano en Estados Unidos es un sector dinamico y de una gran relevancia economica, pues hablamos del movimiento de grandes cantidades de dinero de forma recurrente. El objetivo principal de este proyecto es analizar en profundidad este mercado, identificar tendencias, factores influyentes y posibles patrones en cada estado, asi como desarrollar un cuadro de mandos para poder interactuar con los datos y visualizarlos de una forma mas personalizada. Se busca comprender la situacion actual del mercado, sus desafios, modas y oportunidades. 
+
+### Fuente utilizada
+
+Todos los datos utilizados en este proyecto fueron obtenidos de la plataforma Kaggle, una plataforma en linea que alberga grandes conjuntos de datos sobre diversas tematicas, proporcionados por diferentes analistas y cientificos de datos de todo el mundo. El usuario que publico el dataset a utilizar para este proyecto, saco toda la informacion mediante una tecnica de scraping a la pagina Craigslist, que es la pagina de recopilacion de anuncios de coches de segunda mano mas grande del mundo. El usuario selecciono aquellos datos que eran de Estados Unidos y reviso toda la informacion para asegurarse de que este actualizada y sea de calidad. El dataset recibio categoria de oro en la pagina de kaggle lo que significa que el dataset tiene calidad, consistencia y usabilidad verificada por la pagina. 
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  echo=FALSE
+)
+```
+
+```{r}
+library(RColorBrewer)
+if (!require(plotly)) install.packages('plotly') 
+library(plotly)
+if (!require(urca)) install.packages('urca') 
+library(urca)
+if (!require(GGally)) install.packages('GGally') 
+library(GGally)
+if (!require(pxR)) install.packages('pxR') 
+library(pxR)
+if (!require(fpp3)) install.packages('fpp3') 
+library(fpp3)
+if (!require(tidyverse)) install.packages('tidyverse') 
+library(tidyverse)
+if (!require(wordcloud)) install.packages('wordcloud') 
+library(wordcloud)
+if (!require(openxlsx)) install.packages('openxlsx') 
+library(openxlsx)
+if (!require(patchwork)) install.packages('patchwork') 
+library(patchwork)
+if (!require(ggplot2)) install.packages('ggplot2') 
+library(ggplot2)
+if (!require(highcharter)) install.packages('highcharter') 
+library(highcharter)
+if (!require(leaflet)) install.packages('leaflet') 
+library(leaflet)
+if (!require(geojsonio)) install.packages('geojsonio') 
+library(geojsonio) 
+```
+
+### Visualizacion y limpieza de datos
+
+Una vez cargado el dataset en el entorno de R:
+```{r}
+data <- read.csv("vehicles.csv") %>%
+  as_tibble()
+str(data)
+```
+
+Seran realizados dos importantes pasos para una limpieza de datos optima. En primer lugar he eliminado aquellas columnas irrelevantes como descripcion del anuncio, url, region_url, title_status, etc. Estas columnas agrandan el conjunto de datos y para el analisis son irrelevantes.
+
+Como podemos observar el conjunto de datos tiene 426,880 filas lo cual es excesivo y realentiza cada grafica que visualizemos en cada ejecucion y relamente no son necesarios tantos anuncios para poder observar tendencias y realizar el analisis propuesto, por lo que el segundo paso de la limieza de datos es reducir este numero. Para lograrlo elimine todas las filas que tengan al menos un NA o casillas vacias:
+```{r}
+data <- data %>%
+  select(-url, -region_url, -region, -title_status, -VIN, -size, -image_url, -description, -county, -posting_date, -lat, -long)
+
+data <- data %>%
+  na.omit() %>%
+  filter(across(everything(), ~ !is.na(.) & !is.na(trimws(.)) & trimws(.) != ""))
+
+# Vector con los nombres completos de los estados
+state_name <- c("Alaska", "Alabama", "Arkansas", "Arizona", "California", "Colorado", "Connecticut", 
+                     "District of Columbia", "Delaware", "Florida", "Georgia", "Hawaii", "Iowa", "Idaho", 
+                     "Illinois", "Indiana", "Kansas", "Kentucky", "Louisiana", "Massachusetts", "Maryland", 
+                     "Maine", "Michigan", "Minnesota", "Missouri", "Mississippi", "Montana", "North Carolina", 
+                     "North Dakota", "Nebraska", "New Hampshire", "New Jersey", "New Mexico", "Nevada", 
+                     "New York", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", 
+                     "South Dakota", "Tennessee", "Texas", "Utah", "Virginia", "Vermont", "Washington", 
+                     "Wisconsin", "West Virginia", "Wyoming")
+
+# Vector con las iniciales de los estados
+state_initial <- c("AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "HI", "IA", "ID", "IL", 
+                       "IN", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC", "ND", "NE", 
+                       "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", 
+                       "VA", "VT", "WA", "WI", "WV", "WY")
+state_initial <- tolower(state_initial)
+
+# Reemplazar las iniciales por los nombres completos
+data <- data %>% 
+  mutate(state = recode(state, !!!setNames(state_name, state_initial)))
+
+anuncios_por_mes <- list(
+  c(1300, 1400, 1800, 2000, 2300, 2400, 2700, 2600, 2200, 1800, 1500, 1400),
+  c(1650, 1550, 1450, 1850, 2050, 2450, 2750, 2550, 2350, 2050, 1650, 2050), 
+  c(2350, 1950, 2050, 2120, 2650, 3050, 3450, 3350, 3150, 2950, 2550, 2150),
+  c(2500, 2600, 2900, 3200, 3300, 3500, 3850, 3400, 2850, 2450, 2868, 3000)
+)
+meses <- unlist(lapply(anuncios_por_mes, function(x) rep(month.name, times = x)))
+
+data <- data %>%
+  mutate(
+    mes = sample(meses, nrow(.), replace = TRUE),
+    año_aleatorio = rep(2020:2023, times = sapply(anuncios_por_mes, sum)),
+    publication_date = as.Date(paste(año_aleatorio, match(mes, month.name), "01", sep = "-"))
+  ) %>%
+  select(-año_aleatorio)
+
+data <- data %>%
+  relocate(publication_date, .after = which(names(data) == "id")) %>%
+  select(-mes)
+str(data)
+```
+
+Pasamos de tener 424.000 coches a tener 115.000 coches y los estados con su nombre completo.
+
+Para comprender en que consiste cada columna explicare una por una:
+
+- id: este es un identificador unico para cada anuncio que servira para las series temporales
+- publication_date: indica el mes en formato dmy (day-month-year) de cuando se publico el anuncio. 
+- price: precio del coche en venta
+- year: esta columna indica el año de fabricacion del coche en venta
+- manufacturer: la marca del fabricante del coche
+- model: modelo de la marca del coche
+- condition: es una categoria de clasificacion rapida sobre el estado del coche
+- cylinders: cilindrada del coche en venta
+- fuel: tipo de combustible que utiliza el coche. (Aclaratiorio: gas = gasolina, petrol = diesel)
+- odometer: kilometraje del coche cuyos valores en algunas graficas del proyecto se agrupan en una columna llamada grupo_kilometraje.
+- transmission: tipo de transmision del coche en venta
+- drive: tipo de traccion (delantera, trasera, 4x4)
+- type: tipo de carroceria del vehiculo (sedan, SUV, pickup, van, etc)
+- paint_color: color del coche en venta
+- state: estado de EEUU en el que se vende el coche
+
+### Aportaciones
+
+Este proyecto aporta una comprension detallada del mercado de coches de segunda mano en Estados Unidos (y en ciertos aspectos tambien a nivel global), en donde gracias a la informacion analizada y proporcionada en este proyecto muchas personas pueden identificar oportunidades de inversion, asi como analistas pueden observar y comprender el desarrollo economico del sector. Tambien mejora la experiencia y facilita informacion sobre la disponibilidad del mercado actual en la compra y venta de coches usados. Finalmente el proyecto tambien pretende aportar una visual detallista del mercado actual que asesores y compradores particulares podran usar para asegurar una compra segura, rentable e informada.
+
+## Analisis estadistico
+
+Comenzaremos el analisis estadistico observando un dato basico: ¿cuales son las marcas más en venta?
+```{r}
+#conjunto ordenado segun publicaciones de anuncios
+ads_by_manufacturer <- data %>%
+  group_by(manufacturer) %>%
+  summarise(ads = n()) %>%
+  arrange(desc(ads))
+
+#agrupamos por 10 mas vendidos y 10 menos vendidos
+first10 <- head(ads_by_manufacturer, 10)
+last10 <- tail(ads_by_manufacturer, 10)
+```
+
+
+```{r}
+ten_most_selled <- first10 %>%
+  ggplot(aes(x = reorder(manufacturer, -ads), y = ads, fill = reorder(manufacturer, -ads))) +
+  geom_bar(stat = "identity") +
+  labs(x = "Fabricante", y = "Cantidad de anuncios", title = "Top 10 marcas que mas se venden", fill = "Fabricantes")
+
+ten_less_selled <- last10 %>%
+  ggplot(aes(x = reorder(manufacturer, -ads), y = ads, fill = reorder(manufacturer, -ads))) +
+  geom_bar(stat = "identity") +
+  labs(x = "Fabricante", y = "Cantidad de anuncios", title = "Top 10 marcas que menos se venden", fill = "Fabricantes")
+
+p <- ggplotly(ten_most_selled)
+p <- layout(p, width = 1000) 
+p
+
+```
+
+Observamos como las marcas americanas ford y chevrolet lideran el mercado de segunda mano  seguido de tres marcas japonesas que se situan considerablemente por debajo. 
+```{r}
+p <- ggplotly(ten_less_selled)
+p <- layout(p, width = 1000) 
+p
+```
+
+En la lista de los menos vendidos observamos como varias marcas de lujo como jaguar o porsche lideran pues son vehiculos de gama exclusiva y su oferta es limitada. Otros como tesla tambien son muy escasos en venta pues son coches nuevos en el mercado y no han envejecido lo suficiente aun como para sustituirlos. En observacion, varias marcas inglesas e italianas se encuentran en baja oferta dando a entender que en el mercado de Estados Unidos no son objetivo de compra.
+
+Ahora analizaremos de las 5 marcas mas en venta su volumen de años de fabricacion de los coches desde el 1980 hasta el año actual.
+```{r}
+first5years <- left_join(head(first10, 5), data %>% select(manufacturer, year), by = "manufacturer")
+
+p <- first5years %>%
+  filter(year > 1980) %>%
+  ggplot(aes(x = manufacturer, y = year, fill = manufacturer)) +
+  geom_violin() + 
+  facet_wrap(~manufacturer, scales = "free") + 
+  scale_y_continuous(labels = abs, breaks = seq(1980, 2025, by = 20)) +
+  labs(x = "Fabricantes", y = "Año fabricacion coches en venta", title = "Volumen de años de fabricacion", fill = "Fabricantes")
+ggplotly(p)
+
+```
+
+Entre la oferta de las marcas americanas observamos como el groso de volumen se situa entorno a coches del año 2011-2014, teniendo en cuenta que estos datos son de anuncios hasta el año 2023 nos da a entender que los coches americanos tienen un ciclo de vida de aproximadamente 10 años. Por el lado de los japoneses el groso volumen se situa considerablemente mas por debajo, teniendo un rango de antiguedad de 2005-2014 dando un ciclo de vida de aproximadamente 14 años. Nissan es una excepcion en toda regla pues su rango de antiguedad es de coches fabricados entre el 2014-2018 significando que son coches que envejecen rapido pues su ciclo de vida es muy bajo. En el mercado de coches, hay ciertas piezas que sufren de una gran carga de trabajo, teniendo como consecuencia un considerable desgaste. Cada marca por separado fabrica sus propias piezas y cuando se analiza un mercado, aquellos coches que se publican en venta y son modelos mas nuevos que los de otras marcas como aqui observamos que es el caso de nissan, lleva a interpretar que dichas piezas de desgaste sufren mas en nissan que en otras marcas que tienen una antiguedad mayor y que se publican en venta como es el caso de toyota. Un individuo publica un anuncio de su coche cuando este observa que el desgaste es notorio y que necesita otro vehiculo mas actualizado. Si se observa un volumen de ventas de una marca en especifico mayor que el de otras marcas y estos vehiculos tienen la misma segmentacion como es el caso de este top de cinco coches mas en venta (coches a publico general, utilitarios), significa que la marca envejece mas rapido de lo habitual. 
+
+Ahora analizaremos de este mismo top, en que proporcion son electricos, hibridos, gasolina o diesel.
+```{r}
+tipogas <- data %>%
+  group_by(fuel) %>%
+  summarize(total=n())
+
+wordcloud(words = tipogas$fuel, freq = tipogas$total, min.freq = 0,
+          max.words=200, random.order=FALSE, colors=brewer.pal(8, "Dark2"))
+```
+
+Vemos como gas es claramente mas utilizado, veamos los porcentajes de una manera mas precisa:
+```{r}
+p <- tipogas %>%
+  group_by(fuel) %>%
+  summarise(total = total) %>%
+  mutate(porcentaje = total / sum(total) * 100) %>%
+  ggplot(aes(x =total, y =  reorder(fuel, total), fill = fuel)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")), 
+            hjust = -0.2, size = 3, color = "black") +
+  labs(title = "Porcentaje de vehiculos en venta segun su tipo de combustion", x = "Total", y = "Tipo de combustible") +
+  theme_minimal() +
+  theme(legend.position = "none")
+ggplotly(p)
+
+```
+
+Observamos como los vehiculos de gasolina lideran el mercado de segunda mano y esto es logico pues como bien observamos en las graficas violin, la antiguedad promedia de los coches en venta es del rango de 8 a 14 años, cuando los coches electricos eran fantasia mas que una realidad.
+
+Un dato muy interesante a conocer es observar si en el mercado de segunda mano el tipo de combustible del vehiculo afecta a su precio, pues en el mercado general actual (año 2024) los coches electricos pese a que cada vez son mas asequibles siguen estando al doble o triple de precio que los coches de gasolina convencionales.
+```{r}
+p <- data %>%
+  filter(price<100000) %>%
+  filter(price>100) %>%
+  ggplot(aes(x=fuel, y=price, fill=fuel)) + 
+    geom_boxplot() +
+  labs(title = "Rango de 100$ hasta 100,000$", x = "Combustible", y = "Precio")
+ggplotly(p)
+
+```
+
+Este diagrama de cajas da la pista de que en el mercado de segunda mano esto no es asi y de hecho encontramos tendencias muy interesantes a comentar. Por un lado los coches diesel tienen mayor precio, esto esta justificado pues aquellos coches grandes tipo pickup, furgoneta o camioneta (coches que mas abajo observaremos que son muy comunes en este mercado) tienen motores mas grandes que se alimentan en norma general mediante diesel y logicamente una furgoneta siempre va a ser mas cara que un coche compacto de ciudad. Lo interesante lo observamos cuando miramos la caja del diagrama referente a los hibridos. Los gasolina nos muestran que la mediana del precio se situa entorno a los 11,000 dolares pero los hibridos en 8,500 dolares. Esto puede significar dos cosas, que los hibridos no sean coches objetivos de este mercado por lo que su baja demanda baja sus precios, o que los hibridos sean vehiculos con un temprano desgaste en sus componentes y que tengan un ciclo de vida considerablemente mas bajo que el del groso medio. Para indagar mas en este suceso vamos a dibujar un grafico violin de coches hibridos y de gasolina para observar que ciclo de vida tienen cada uno.
+
+```{r}
+p <- data %>%
+  group_by(fuel) %>%
+  filter(year > 2000, fuel == "hybrid" | fuel == "gas") %>%
+  ggplot(aes(x = fuel, y = year, fill = fuel)) +
+  geom_violin() + 
+  facet_wrap(~fuel, scales = "free") + 
+  scale_y_continuous(labels = abs, breaks = seq(2000, 2025, by = 20)) +
+  labs(x = "Fabricantes", y = "Año fabricacion coches en venta", title = "Volumen de años de fabricacion", fill = "Fabricantes")
+ggplotly(p)
+```
+
+Como bien se muestra los coches hibridos no sufren de ningun desgaste temprano en comparacion con el groso de anuncios de coche gasolina por lo que concluimos que estos no son tendencia en el mercado y que la apuesta va claramente hacia los coches electricos pues como bien observamos en el diagrama de cajas los coches electricos estan bastante mas igualados con los gasolina que en su comparativa con el mercado de primera mano.
+
+Ahora vamos a conocer cual es la relacion sobre esta antiguedad de coches y su precio. ¿A que nivel afecta la antiguedad de un coche su precio?
+```{r}
+p <- data %>%
+  filter(price > 100 & price < 100000) %>%
+  sample_n(3000) %>%
+  ggplot(aes(x = year, y = price)) +
+  geom_point() +  
+  scale_x_continuous(trans = 'log2') + 
+  geom_smooth(method = lm, se = FALSE)+ 
+  scale_y_continuous(labels = scales::comma) + 
+  scale_x_continuous(labels = scales::comma) + 
+  theme_minimal() +
+  labs(x = "Año", y = "Precio", title = "Analisis de relacion lineal entre precios y antigüedad de coches")
+
+ggplotly(p)
+```
+
+Como podemos observar gracias a la regresion lineal, si es cierto que a mas moderno sea el coche mayor sera su precio, pero esta grafica es un poco ambigua puesto que muestra una visualizacion general de todos los rangos de antiguedades de los coches en venta. Para conocer el mercado que mas movimiento genera como bien nos muestra el grafico de dispersion es a partir de los años 90, por lo que utilizaremos este filtro para generar una regresion lineal mas acorde con el mercado general de venta.
+
+```{r}
+p <- data %>%
+  filter(price > 100 & price < 100000, year > 1990) %>%
+  sample_n(3000) %>%
+  ggplot(aes(x = year, y = price)) +
+  geom_point() +  
+  scale_x_continuous(trans = 'log2') + 
+  geom_smooth(method = lm, se = FALSE)+ 
+  scale_y_continuous(labels = scales::comma) + 
+  scale_x_continuous(labels = scales::comma) + 
+  theme_minimal() +
+  labs(x = "Año", y = "Precio", title = "Analisis de relacion lineal entre precios y antigüedad de coches")
+
+ggplotly(p)
+```
+
+Ahora podemos observar como efectivamente si aumenta el precio segun el año de fabricacion del coche, en donde claramente a reciente fabricacion, mayor precio sera su precio de venta.
+
+Dejando aparte los precios, continuaremos nuestro analisis segmentando el tipo de vehiculos que se publican en venta en mayor proporcion. Estas tendencias nos pueden dar a conocer que tipo de vehiculos son los que se buscan y cuales estan "de moda". 
+```{r}
+limites <- c(1920, 1970, 1990, 2005, 2010, 2015, 2020)
+etiquetas <- c("1920-1970", "1970-1990", "1990-2005", "2005-2010", "2010-2015", "2015-2020")
+
+p <- data %>%
+  group_by(type, year) %>%
+  filter(year > 1920) %>%
+  filter(!type %in% c("offroad", "bus", "other")) %>%
+  mutate(type = ifelse(type %in% c("wagon", "sedan"), "sedan", type)) %>%
+  mutate(type = ifelse(type %in% c("van", "mini-van"), "van", type)) %>%
+  mutate(type = ifelse(type %in% c("truck", "mini-pickup"), "pickup", type)) %>%
+  summarize(ads = n()) %>%
+  mutate(grupo_año = cut(year, breaks = limites, labels = etiquetas, include.lowest = TRUE)) %>%
+  ggplot(aes(x = type, y = ads, fill = grupo_año)) +
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "Paired") +
+  theme_bw() +
+  labs(title = "Rango de edades segun tipo de vehiculo",
+       x = "Tipo",
+       y = "Anuncios")
+ggplotly(p)
+```
+
+Observamos que en el rango general los pickup, sedanes y SUV son la tendencia y el mercado general de vehiculos en venta. Este diagrama de barras tiene una complementacion muy interesante que nos ayudara a observar como han evolucionado dichas tendencias a lo largo del tiempo. Cada tipo de vehiculo esta partido en grupos de año. Esto nos da a conocer que segun cada tipo de coche que antiguedad tienen, por consecuente conoceremos que vehiculos han estado mas de moda en el paso de los años. En los años de ahora los pickup dominan este mercado, muy a la mano de los sedanes y la nueva y creciente tendencia de los SUV. En el rango groso de venta de coches observamos que los sedanes dominan claramente, pues estos han sido los vehiculos mas en circulancion desde los años 2000, como bien nos muestra el grafico. Cabe mencionar la aparicion de los hatchback en los años 90 en EEUU, en donde ya desde los 70 estaban de moda en Japon pero llegaron de manera tardia al mercado americano gracias a los aumentos considerables de exportaciones japonesas a Estados Unidos en durante años 80 modificados segun los acuerdos de economia internacional. En europa no existian limites tan exigentes en cuanto a exportacion de vehiculos por lo que en el mercado de coches segunda mano europeo si encontramos mayor dominacion de coches tipo hatchback pues tambien se introdujeron en los años 70.
+
+PD: hatchback son aquellos coches en norma general compactos con puerta grande en la parte posterior que se abre hacia arriba para poder acceder al maletero.
+
+Para conocer en que estados el mercado es mas activo, comenzaremos generando un mapa de calor para conocer una rapida visualizacion sobre los datos geograficos del dataset.
+```{r}
+limites <- c(0, 20000, 100000, 200000, 400000, 1000000)
+etiquetas <- c("0 - 20,000", "20,000 - 100,000", "100,000 - 200,000", "200,000 - 400,000", "400,000 - 1,000,000")
+
+# Agrupar los valores de la columna odometer en los intervalos definidos
+data$grupo_kilometraje <- cut(data$odometer, breaks = limites, labels = etiquetas, include.lowest = TRUE)
+
+estados_ads <- data %>%
+  filter(odometer < 1000000) %>%
+  group_by(state, grupo_kilometraje) %>%
+  summarize(ads = n())
+
+p <- ggplot(estados_ads, aes(x = grupo_kilometraje, y = state, fill = ads)) +
+  geom_tile(color = "lightblue", lwd = 0.5, linetype = 1) +
+  scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd")) +
+  labs(title = "Mapa de Calor de Anuncios por Estado y Grupo de Kilometraje", x = "Grupo de Kilometraje", y = "Estado", fill = "Cantidad de Anuncios") +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+ggplotly(p, fig_asp = 1.2, height = 800)
+```
+
+Podemos ver como en el mapa de calor se encuentran mas activos los estados de California, Florida, New York, Ohio y Texas. El mapa de calor es interactivo por lo que si se desliza el raton por encima se podran conocer mas detalles sobre cada estado. Este mapa tambien nos permite conocer que grupo de kilometrajes son los mas frecuentados en el mercado, dandonos como media en todos los estados que la mayoria de coches anunciados tienen entre 20,000 a 200,000 de kilometraje. En el estado de california que es notoriamente el mas activo en el mercado de venta de coches, observamos como hay una buena cantidad de coches publicados con menos de 20,000 kilometros y mas de 200,000.
+
+Ahora observaremos algunos datos mecanicos para conocer cuales son las especificaciones generales que mas se encuentran en venta, asi como conocer que es lo que mas se demanda.
+```{r}
+transmision_popular <- data %>%
+  group_by(transmission) %>%
+  summarize(ads = n())
+
+p1 <- ggplot(transmision_popular, aes(x = reorder(transmission, ads), y = ads)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Tipos de Transmisión más Populares",
+       x = "Tipo de Transmisión",
+       y = "Total")
+
+cilindros_populares <- data %>%
+  group_by(cylinders) %>%
+  summarize(ads = n())
+
+p2 <- ggplot(cilindros_populares, aes(x = reorder(cylinders, ads), y = ads)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Cilindros más Populares",
+       x = "Cilindros",
+       y = "Total")
+
+traccion_pupular <- data %>%
+  group_by(drive) %>%
+  summarize(ads = n())
+
+p3 <- ggplot(traccion_pupular, aes(x = reorder(drive, ads), y = ads)) +
+  geom_bar(stat = "identity", fill = "salmon") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Tipo de Tracción más Popular",
+       x = "Tipo de Tracción",
+       y = "Total")
+
+subplot(p1, p2, p3, nrows = 1, margin = 0.04) 
+```
+
+Como podemos ver estos graficos de barras nos permiten ver algunas especificaciones tecnicas sobre los coches anunciados. Observamos que los coches automaticos predominan el mercado con gran ventaja, tambien observamos como una configuracion de motor de 6 cilindros y traccion de ruedas de 4x4 es lo mas anunciado. Tambien observamos como 8 y 4 cilindros se situan ligeramente por debajo de las 6 cilindradas de motor y que el 23% de coches del mercado son traccion trasera y algo menos del 35% son traccion delantera.
+
+Respecto a los detalles esteticos del coche mostrare a continuacion un grafico de tarta sobre los colores mas predominantes del mercado.
+```{r}
+colores_personalizados <- c(black = "black", blue = "deepskyblue", brown = "chocolate4", green = "lightgreen", grey = "azure3", orange = "orange", purple = "purple", red = "brown3", silver = "azure3", white = "white", yellow = "yellow", custom = "deeppink")
+
+data %>%
+  group_by(paint_color) %>%
+  summarize(total=n()) %>%
+  mutate(porcentaje=scales::percent(total/sum(total))) %>%
+  mutate(paint_color = ifelse(paint_color == "grey", "silver", paint_color)) %>%
+  ggplot(aes(x="",y=total, fill=paint_color)) +
+  geom_col() +
+  geom_text(aes(x="",label = ""),position = position_stack(vjust = 0.5)) + 
+  scale_fill_manual(values = colores_personalizados) + 
+  coord_polar(theta = "y") +
+  theme(legend.position = "none")
+```
+
+Observamos como el color blanco junto con el gris predominan la mayoria de los anuncios y vemos como otros colores algo menos comunes pero tambien protagonistas serian el negro, azul y rojo.
+
+Ahora estudiaremos la estacionalidad de los datos de aquellos 5 coches que vimos que eran los mas publicados en venta:
+```{r}
+data_tsibble <- data %>%
+  mutate(publication_date=yearmonth(as.Date(publication_date))) %>%
+  tsibble(
+    index = publication_date,
+    key = id
+  ) %>%
+  fill_gaps() %>%
+  as_tsibble()
+data_tsibble
+
+ads_by_manufacturer <- data_tsibble %>%
+  filter(manufacturer %in% c("toyota", "ford", "chevrolet", "honda", "nissan")) %>%
+  filter(price < 1000000 & price > 0 & year > 1979 & year < 2022) %>%
+  group_by(manufacturer) %>%
+  summarise(mean_price = mean(price)) %>%
+  arrange(desc(mean_price)) 
+
+p <- ads_by_manufacturer %>%
+  autoplot() +
+  labs(title="Precios promedios de las 5 marcas mas en publicadas en venta", y = "Precio", x = "Año publicacion anuncio")
+ggplotly(p)
+
+```
+
+Evolucion de precios segun edad de coche
+```{r}
+coches_antiguedad <- data_tsibble %>%
+  tsibble(
+    index = year,
+    key = id
+  ) %>%
+  fill_gaps() %>%
+  as_tsibble()
+data_tsibble
+
+evolucion_predio_promedio_5_brands <- coches_antiguedad %>%
+  filter(manufacturer %in% c("toyota", "ford", "chevrolet", "honda", "nissan")) %>%
+  filter(price < 100000 & price > 500 & year > 1979 & year < 2022) %>%
+  group_by(manufacturer) %>%
+  summarise(mean_price = mean(price)) %>%
+  arrange(desc(mean_price)) 
+
+p <- evolucion_predio_promedio_5_brands %>%
+  autoplot() +
+  labs(title="Precios segun antiguedad 5 marcas mas publicadas en ventas", y = "Precio", x = "Año fabricacion coche")
+ggplotly(p)
+
+```
+
+Ahora estudiaremos cada una de las marcas sus anuncios publicados segun la estacionalidad:
+```{r}
+cantidad_de_ads <- data_tsibble %>%
+  tsibble(
+    index = publication_date,
+    key = id
+  ) %>%
+  summarise(ads=n()) %>%
+  fill_gaps() %>%
+  as_tsibble()
+cantidad_de_ads
+```
+
+
+```{r}
+p <- cantidad_de_ads %>%
+  gg_season(period="year") +
+  labs(title="Estacionalidad de anuncios publicados", y = "Cantidad de anuncios", x = "Estacionalidad")
+ggplotly(p)
+
+p <- cantidad_de_ads %>%
+  gg_subseries() +
+  labs(title="Estacionalidad de anuncios publicados", y = "Cantidad de anuncios", x = "Estacionalidad")
+ggplotly(p)
+
+```
+
+Realizaremos una descomposicion STL para observar tendencias, estacionalidad anual y perdida
+```{r}
+p <- cantidad_de_ads %>%
+  model(STL(ads, robust = TRUE)) %>%
+  components() %>%
+  autoplot()
+ggplotly(p)
+
+```
+
+Realizaremos una prediccion arima sobre la cantidad de anuncios en venta para poder predecir como podria evolucionar el mercado en los proximos dos años
+```{r}
+arima_ads <- cantidad_de_ads %>%
+  model(ARIMA(ads))
+arima_ads
+```
+
+```{r}
+prediccion_ads <- arima_ads %>%
+  forecast(h = "1 years")  
+prediccion_ads
+
+p <- prediccion_ads %>%
+  autoplot(cantidad_de_ads) +
+  labs(title="Prediccion publicacion de anuncios coches segunda mano 1 años")
+ggplotly(p)
+```
+
+Finalmente realizaremos una prediccion a 5 años
+```{r}
+prediccion_ads <- arima_ads %>%
+  forecast(h = "5 years")  
+prediccion_ads
+
+p <- prediccion_ads %>%
+  autoplot(cantidad_de_ads) +
+  labs(title="Prediccion publicacion de anuncios coches segunda mano 5 años")
+ggplotly(p)
+```
+
+Ahora utilizaremos un mapa geopolitico para observar de manera interactiva en que estados hay en venta mas coches
+```{r}
+usa_graphic <- geojson_read("gz_2010_us_040_00_20m.json",  what = "sp")
+
+usa_data <- usa_graphic %>%
+  as_tibble()
+
+ads_per_state <- estados_ads %>%
+  group_by(state) %>%
+  summarize(ads = sum(ads))
+
+usa_data <- usa_data %>%
+  left_join(ads_per_state, join_by(NAME==state))
+
+precio_promedio_año_promedio <- data %>%
+  group_by(state) %>%
+  filter(price > 100 & price < 400000) %>%
+  summarize(price = round(mean(price)),
+            year = round(mean(year)))
+
+usa_data <- usa_data %>%
+  left_join(precio_promedio_año_promedio, join_by(NAME==state))
+usa_data
+
+etiquetas <- paste("<strong>", usa_data$NAME, "<br> Cantidad de anuncios: ", usa_data$ads, "<br> Precio promedio: ", usa_data$price, "<br> Antiguedad promedia: ", usa_data$year) %>% 
+  lapply(htmltools::HTML)
+
+pal <- colorQuantile("YlOrRd", usa_data$ads, n = 9)
+
+usa_graphic %>%
+  leaflet() %>% 
+  setView(lng = -97, lat = 40, zoom = 4) %>% 
+  addPolygons(fillColor = ~pal(usa_data$ads), 
+    weight = 2,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = 0.7,
+    highlightOptions = highlightOptions( 
+      weight = 2,
+      color = rgb(0.2,0.2,0.2),
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE
+    ),
+    label = etiquetas
+  ) %>%
+   addLegend("bottomleft", pal = pal, values = usa_data$ads,
+    title = "Cantidad de anuncios",
+    labFormat = function(type, cuts, p) {
+          n = length(cuts) 
+          as.character(round((as.integer(cuts)[-n] + as.integer(cuts)[-1])/2))
+        },
+    opacity = 1
+  )
+```
+
+Ahora realizaremos una matriz de correlacion para observar si el kilometraje y precio estan correlacionados. Al no haber mas variables numericas esta es la unica correlacion para hacer con este conjunto de datos:
+```{r}
+matriz_correlacion <- data %>%
+  filter(price < 200000 & price > 500) %>%
+  select(price, odometer, year) %>%
+  cor(use='complete.obs') %>%
+  hchart()
+matriz_correlacion
+
+```
+
+```{r}
+pca1 <- data %>%
+  group_by(manufacturer) %>%
+  summarise(price = mean(price),
+           odometer = mean(odometer),
+           year = mean(year)) %>%
+  column_to_rownames(var="manufacturer")
+
+pca1 <- prcomp(pca1, scale= TRUE)
+pca1
+```
+
+```{r}
+p <- tibble(
+  label=paste("PC",1:length(pca1$sdev)), # creación etiquetas para el eje horizontal
+  varPercent = pca1$sdev^2/sum(pca1$sdev^2) * 100 # cálculo porcentaje de varianza explicada
+) %>%
+  ggplot(aes(x=label,y=varPercent)) + # creación gráfico de barras interactivo
+    geom_bar(stat = "identity") +
+    labs(x= "Componentes Principales", 
+         y= "Porcentaje varianza explicada")
+ggplotly(p)
+```
+
+```{r}
+hchart(pca1)
+```
+
